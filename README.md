@@ -20,6 +20,7 @@ No hay un servidor real: el backend es **simulado (mock) con MSW 2** y entrega l
 
 Como GitHub Pages no tiene backend, el servidor simulado (un Service Worker de MSW) se activa tanto en desarrollo como en el sitio publicado.
 La primera vez que se abre el sitio, el navegador lo registra y recién ahí se dibuja la aplicación.
+Si el navegador carga la página sin el Service Worker (por ejemplo, con una recarga forzada `Ctrl+Shift+R`), la aplicación espera un instante a que el navegador le dé el control y, si no llega, se recarga una sola vez de forma normal para que el servidor simulado vuelva a responder (`src/main.jsx`).
 
 ## Cómo ejecutarlo
 
@@ -124,7 +125,7 @@ pruebas/
 ## Pruebas
 
 - **Unitarias (`npm test`)**: 12 pruebas con MSW en modo Node. Revisan los 6 destinos, los vuelos y hoteles de cada destino (precios, fechas y disponibilidad), el error GraphQL de un destino inexistente, la caché de Apollo y cada tipo de falla del cliente REST (500, 404, respuesta que no es JSON, falla de red y pedido cancelado).
-- **Navegador (`npm run test:e2e`)**: recorren el sitio en desarrollo (`npm start`) y en la versión compilada servida bajo `/viajes-sergio-mascareno-pfy2202/`, que es la ruta de GitHub Pages. Se repite en 4 anchos (360, 390, 768 y 1366 px): carga de destinos por REST, selección de destino, vuelos y hoteles por GraphQL, filtro, botón atrás, recarga en una ruta interna, rutas inexistentes, ausencia de desborde horizontal y de errores en consola. Aparte se simulan fallas del backend (REST con 500 y con respuesta que no es JSON, GraphQL con `errors` y sin conexión) y se comprueba el mensaje y el botón **Reintentar**.
+- **Navegador (`npm run test:e2e`)**: recorren el sitio en desarrollo (`npm start`) y en la versión compilada servida bajo `/viajes-sergio-mascareno-pfy2202/`, que es la ruta de GitHub Pages. Se repite en 4 anchos (360, 390, 768 y 1366 px): carga de destinos por REST, selección de destino, vuelos y hoteles por GraphQL, filtro, botón atrás, recarga en una ruta interna, rutas inexistentes, ausencia de desborde horizontal y de errores en consola. Aparte se simulan fallas del backend (REST con 500 y con respuesta que no es JSON, GraphQL con `errors` y sin conexión) y se comprueba el mensaje y el botón **Reintentar**. También se prueba que la primera visita no se recarga sola y que una página que queda sin control del Service Worker se recarga una sola vez.
 - **Navegadores**: por defecto se prueba Chromium. Para probar también Firefox y WebKit:
 
 ```bash

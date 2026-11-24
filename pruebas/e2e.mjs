@@ -63,6 +63,30 @@ async function volcar(page, nombre) {
 async function foto(page, nombre) {
   if (capturas) await page.screenshot({ path: `${capturas}/${nombre}.png`, fullPage: true })
 }
+// Anota los errores de la pagina con su origen (archivo y linea), para poder rastrearlos despues.
+function registrarErrores(page, lista, ignorarFallasDeRed) {
+  page.on('pageerror', (e) => lista.push(`${e.message} @ ${String(e.stack || '').split('\n')[0]}`))
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return
+    if (ignorarFallasDeRed && /Failed to load resource/.test(m.text())) return
+    const l = m.location()
+    lista.push(`${m.text()} @ ${l.url}:${l.lineNumber}:${l.columnNumber}`)
+  })
+}
+
+// Si una prueba lanza una excepcion no se aborta todo el script: se anota la FALLA con lo que habia en pantalla.
+async function diagnostico(page, errores) {
+  try {
+    const info = await page.evaluate(() => ({
+      url: location.href,
+      conServiceWorker: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+      pantalla: (document.querySelector('main')?.innerText || '').replace(/\s+/g, ' ').slice(0, 300),
+    }))
+    console.log('      DIAGNOSTICO', JSON.stringify(info), '| consola:', errores.join(' | ').slice(0, 300))
+  } catch (e) {
+    console.log('      DIAGNOSTICO no disponible:', String(e.message).split('\n')[0])
+  }
+}
 const sinDesborde = (page) => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)
 
 for (const nombreNav of navegadores) {
@@ -75,103 +99,164 @@ for (const nombreNav of navegadores) {
     continue
   }
 
+  console.log(`\n##### ${nombreNav} ${browser.version()} #####`)
   for (const objetivo of objetivos) {
     for (const [ancho, w, h] of anchos) {
       const etiqueta = `${nombreNav}/${objetivo.nombre}/${ancho}`
       console.log(`\n=== ${etiqueta} ===`)
       const context = await browser.newContext({ viewport: { width: w, height: h } })
       const page = await context.newPage()
+      const fallasAntes = fail
       const errores = []
       const graphql = []
-      page.on('pageerror', (e) => errores.push(e.message))
-      page.on('console', (m) => m.type() === 'error' && errores.push(m.text()))
+      registrarErrores(page, errores, false)
       page.on('request', (r) => r.url().endsWith('/graphql') && graphql.push(r.postData() || ''))
       const base = objetivo.url
       const cuentaGraphql = (id) => graphql.filter((p) => p.includes(`"destinoId":"${id}"`)).length
+      try {
 
-      // ---- Inicio
-      await page.goto(base)
-      await page.waitForSelector('h1')
-      check((await page.locator('h1').innerText()) === 'Planifica tu próximo viaje', `[${etiqueta}] Inicio muestra el titulo`)
-      check((await page.locator('nav[aria-label="Menú principal"] a').count()) === 2, `[${etiqueta}] Menu principal con 2 enlaces`)
-      check(await sinDesborde(page), `[${etiqueta}] Inicio sin desborde horizontal`)
-      await volcar(page, `inicio-${objetivo.nombre}-${ancho}`)
-      await foto(page, `inicio-${objetivo.nombre}-${ancho}`)
+        // ---- Inicio
+        await page.goto(base)
+        await page.waitForSelector('h1')
+        check((await page.locator('h1').innerText()) === 'Planifica tu próximo viaje', `[${etiqueta}] Inicio muestra el titulo`)
+        check((await page.locator('nav[aria-label="Menú principal"] a').count()) === 2, `[${etiqueta}] Menu principal con 2 enlaces`)
+        check(await sinDesborde(page), `[${etiqueta}] Inicio sin desborde horizontal`)
+        await volcar(page, `inicio-${objetivo.nombre}-${ancho}`)
+        await foto(page, `inicio-${objetivo.nombre}-${ancho}`)
 
-      // ---- Destinos (API REST)
-      await page.getByRole('link', { name: 'Destinos', exact: true }).click()
-      await page.getByRole('status').filter({ hasText: 'Cargando destinos...' }).waitFor()
-      check(true, `[${etiqueta}] Muestra "Cargando destinos..." mientras responde la API REST`)
-      await page.locator(tarjetas).first().waitFor()
-      check((await page.locator(tarjetas).count()) === 6, `[${etiqueta}] Lista 6 destinos desde la API REST`)
-      check((await page.locator(estado).count()) === 0, `[${etiqueta}] El indicador de carga se retira al llegar los datos`)
-      const textoCusco = await page.locator(tarjetas).first().innerText()
-      check(/Perú/i.test(textoCusco) && /Machu Picchu/.test(textoCusco), `[${etiqueta}] Cada destino muestra pais y actividades populares`)
-      const acts = await page.locator(`${tarjetas} .lista-simple`).evaluateAll((uls) => uls.map((u) => u.children.length))
-      check(acts.every((n) => n >= 3), `[${etiqueta}] Todos los destinos tienen 3 actividades`)
-      check(await sinDesborde(page), `[${etiqueta}] Destinos sin desborde horizontal`)
-      check(page.url().endsWith('#/destinos'), `[${etiqueta}] La URL del router es #/destinos`)
-      await volcar(page, `destinos-${objetivo.nombre}-${ancho}`)
-      await foto(page, `destinos-${objetivo.nombre}-${ancho}`)
+        // ---- Destinos (API REST)
+        await page.getByRole('link', { name: 'Destinos', exact: true }).click()
+        await page.getByRole('status').filter({ hasText: 'Cargando destinos...' }).waitFor()
+        check(true, `[${etiqueta}] Muestra "Cargando destinos..." mientras responde la API REST`)
+        await page.locator(tarjetas).first().waitFor()
+        check((await page.locator(tarjetas).count()) === 6, `[${etiqueta}] Lista 6 destinos desde la API REST`)
+        check((await page.locator(estado).count()) === 0, `[${etiqueta}] El indicador de carga se retira al llegar los datos`)
+        const textoCusco = await page.locator(tarjetas).first().innerText()
+        check(/Perú/i.test(textoCusco) && /Machu Picchu/.test(textoCusco), `[${etiqueta}] Cada destino muestra pais y actividades populares`)
+        const acts = await page.locator(`${tarjetas} .lista-simple`).evaluateAll((uls) => uls.map((u) => u.children.length))
+        check(acts.every((n) => n >= 3), `[${etiqueta}] Todos los destinos tienen 3 actividades`)
+        check(await sinDesborde(page), `[${etiqueta}] Destinos sin desborde horizontal`)
+        check(page.url().endsWith('#/destinos'), `[${etiqueta}] La URL del router es #/destinos`)
+        await volcar(page, `destinos-${objetivo.nombre}-${ancho}`)
+        await foto(page, `destinos-${objetivo.nombre}-${ancho}`)
 
-      // ---- Seleccionar un destino -> vuelos y hoteles (API GraphQL)
-      await page.getByRole('link', { name: 'Ver vuelos y hoteles de Cusco' }).click()
-      await page.getByRole('status').filter({ hasText: 'Buscando vuelos y hoteles en Cusco...' }).waitFor()
-      check(true, `[${etiqueta}] Muestra "Buscando vuelos y hoteles..." mientras responde GraphQL`)
-      await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
-      check(page.url().endsWith('#/destinos/cusco'), `[${etiqueta}] La URL del router es #/destinos/cusco`)
-      check((await page.locator('h1').innerText()) === 'Cusco', `[${etiqueta}] El detalle muestra el nombre del destino`)
-      check((await page.locator('#vuelos ~ ul > li').count()) === 3, `[${etiqueta}] Cusco: 3 vuelos`)
-      check((await page.locator('#hoteles ~ ul > li').count()) === 3, `[${etiqueta}] Cusco: 3 hoteles`)
-      const detalle = await page.locator('main').innerText()
-      check(/289\.000/.test(detalle) && /78\.000/.test(detalle), `[${etiqueta}] Muestra precios en pesos`)
-      check(/2027/.test(detalle) && /Salida/.test(detalle) && /Regreso/.test(detalle), `[${etiqueta}] Muestra fechas de vuelos y hoteles`)
-      check(/Agotado/.test(detalle) && /Quedan 3 asientos/.test(detalle) && /Disponible \(14 asientos\)/.test(detalle), `[${etiqueta}] Muestra la disponibilidad (disponible, pocos y agotado)`)
-      check(/Machu Picchu/.test(detalle), `[${etiqueta}] El detalle conserva las actividades del destino (REST)`)
-      check(await sinDesborde(page), `[${etiqueta}] Detalle sin desborde horizontal`)
-      await volcar(page, `detalle-${objetivo.nombre}-${ancho}`)
-      await foto(page, `detalle-${objetivo.nombre}-${ancho}`)
+        // ---- Seleccionar un destino -> vuelos y hoteles (API GraphQL)
+        await page.getByRole('link', { name: 'Ver vuelos y hoteles de Cusco' }).click()
+        await page.getByRole('status').filter({ hasText: 'Buscando vuelos y hoteles en Cusco...' }).waitFor()
+        check(true, `[${etiqueta}] Muestra "Buscando vuelos y hoteles..." mientras responde GraphQL`)
+        await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
+        check(page.url().endsWith('#/destinos/cusco'), `[${etiqueta}] La URL del router es #/destinos/cusco`)
+        check((await page.locator('h1').innerText()) === 'Cusco', `[${etiqueta}] El detalle muestra el nombre del destino`)
+        check((await page.locator('#vuelos ~ ul > li').count()) === 3, `[${etiqueta}] Cusco: 3 vuelos`)
+        check((await page.locator('#hoteles ~ ul > li').count()) === 3, `[${etiqueta}] Cusco: 3 hoteles`)
+        const detalle = await page.locator('main').innerText()
+        check(/289\.000/.test(detalle) && /78\.000/.test(detalle), `[${etiqueta}] Muestra precios en pesos`)
+        check(/2027/.test(detalle) && /Salida/.test(detalle) && /Regreso/.test(detalle), `[${etiqueta}] Muestra fechas de vuelos y hoteles`)
+        check(/Agotado/.test(detalle) && /Quedan 3 asientos/.test(detalle) && /Disponible \(14 asientos\)/.test(detalle), `[${etiqueta}] Muestra la disponibilidad (disponible, pocos y agotado)`)
+        check(/Machu Picchu/.test(detalle), `[${etiqueta}] El detalle conserva las actividades del destino (REST)`)
+        check(await sinDesborde(page), `[${etiqueta}] Detalle sin desborde horizontal`)
+        await volcar(page, `detalle-${objetivo.nombre}-${ancho}`)
+        await foto(page, `detalle-${objetivo.nombre}-${ancho}`)
 
-      // ---- Filtro con estado (useState)
-      await page.getByLabel('Mostrar solo opciones con disponibilidad').check()
-      check((await page.locator('#vuelos ~ ul > li').count()) === 2 && (await page.locator('#hoteles ~ ul > li').count()) === 2, `[${etiqueta}] El filtro deja solo las opciones con disponibilidad (2 y 2)`)
-      check(!/Agotado/.test(await page.locator('main').innerText()), `[${etiqueta}] Con el filtro no queda nada agotado`)
-      await page.getByLabel('Mostrar solo opciones con disponibilidad').uncheck()
-      check((await page.locator('#vuelos ~ ul > li').count()) === 3, `[${etiqueta}] Al desmarcar el filtro vuelven todas`)
+        // ---- Filtro con estado (useState)
+        await page.getByLabel('Mostrar solo opciones con disponibilidad').check()
+        check((await page.locator('#vuelos ~ ul > li').count()) === 2 && (await page.locator('#hoteles ~ ul > li').count()) === 2, `[${etiqueta}] El filtro deja solo las opciones con disponibilidad (2 y 2)`)
+        check(!/Agotado/.test(await page.locator('main').innerText()), `[${etiqueta}] Con el filtro no queda nada agotado`)
+        await page.getByLabel('Mostrar solo opciones con disponibilidad').uncheck()
+        check((await page.locator('#vuelos ~ ul > li').count()) === 3, `[${etiqueta}] Al desmarcar el filtro vuelven todas`)
 
-      // ---- Volver, elegir otro destino, y volver al primero (cache de Apollo)
-      await page.getByRole('link', { name: '← Todos los destinos' }).click()
-      await page.locator(tarjetas).first().waitFor()
-      check((await page.locator(estado).count()) === 0, `[${etiqueta}] Volver a Destinos no vuelve a pedirlos (sin indicador de carga)`)
-      await page.getByRole('link', { name: 'Ver vuelos y hoteles de Roma' }).click()
-      await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
-      check((await page.locator('h1').innerText()) === 'Roma', `[${etiqueta}] Selecciona otro destino (Roma)`)
-      check((await page.locator('#vuelos ~ ul > li').count()) === 2 && (await page.locator('#hoteles ~ ul > li').count()) === 2, `[${etiqueta}] Roma: 2 vuelos y 2 hoteles`)
-      await page.goBack()
-      await page.locator(tarjetas).first().waitFor()
-      await page.getByRole('link', { name: 'Ver vuelos y hoteles de Cusco' }).click()
-      await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
-      check(cuentaGraphql('cusco') === 1, `[${etiqueta}] Volver a un destino ya visto no repite la consulta GraphQL (cache)`)
+        // ---- Volver, elegir otro destino, y volver al primero (cache de Apollo)
+        await page.getByRole('link', { name: '← Todos los destinos' }).click()
+        await page.locator(tarjetas).first().waitFor()
+        check((await page.locator(estado).count()) === 0, `[${etiqueta}] Volver a Destinos no vuelve a pedirlos (sin indicador de carga)`)
+        await page.getByRole('link', { name: 'Ver vuelos y hoteles de Roma' }).click()
+        await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
+        check((await page.locator('h1').innerText()) === 'Roma', `[${etiqueta}] Selecciona otro destino (Roma)`)
+        check((await page.locator('#vuelos ~ ul > li').count()) === 2 && (await page.locator('#hoteles ~ ul > li').count()) === 2, `[${etiqueta}] Roma: 2 vuelos y 2 hoteles`)
+        await page.goBack()
+        await page.locator(tarjetas).first().waitFor()
+        await page.getByRole('link', { name: 'Ver vuelos y hoteles de Cusco' }).click()
+        await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
+        check(cuentaGraphql('cusco') === 1, `[${etiqueta}] Volver a un destino ya visto no repite la consulta GraphQL (cache)`)
 
-      // ---- Boton atras del navegador y recarga en una ruta interna
-      await page.goBack()
-      check(page.url().endsWith('#/destinos'), `[${etiqueta}] El boton atras vuelve a Destinos`)
-      await page.goto(base + '#/destinos/madrid')
-      await page.reload()
-      await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
-      check((await page.locator('h1').innerText()) === 'Madrid', `[${etiqueta}] Recargar en #/destinos/madrid abre Madrid`)
+        // ---- Boton atras del navegador y recarga en una ruta interna
+        await page.goBack()
+        check(page.url().endsWith('#/destinos'), `[${etiqueta}] El boton atras vuelve a Destinos`)
+        await page.goto(base + '#/destinos/madrid')
+        await page.reload()
+        await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
+        check((await page.locator('h1').innerText()) === 'Madrid', `[${etiqueta}] Recargar en #/destinos/madrid abre Madrid`)
 
-      // ---- Rutas que no existen
-      await page.goto(base + '#/destinos/atlantida')
-      await page.getByRole('alert').waitFor()
-      check(/Destino no encontrado/.test(await page.locator(alerta).innerText()), `[${etiqueta}] Un destino inexistente muestra "Destino no encontrado"`)
-      await page.goto(base + '#/ruta-que-no-existe')
-      await page.getByRole('heading', { name: 'Página no encontrada' }).waitFor()
-      check(true, `[${etiqueta}] Una ruta inexistente muestra "Página no encontrada"`)
-      check((await page.title()).startsWith('Página no encontrada'), `[${etiqueta}] El titulo de la pestana cambia segun la pagina`)
+        // ---- Rutas que no existen
+        await page.goto(base + '#/destinos/atlantida')
+        await page.getByRole('alert').waitFor()
+        check(/Destino no encontrado/.test(await page.locator(alerta).innerText()), `[${etiqueta}] Un destino inexistente muestra "Destino no encontrado"`)
+        await page.goto(base + '#/ruta-que-no-existe')
+        await page.getByRole('heading', { name: 'Página no encontrada' }).waitFor()
+        check(true, `[${etiqueta}] Una ruta inexistente muestra "Página no encontrada"`)
+        check((await page.title()).startsWith('Página no encontrada'), `[${etiqueta}] El titulo de la pestana cambia segun la pagina`)
 
-      check(errores.length === 0, `[${etiqueta}] Sin errores en consola${errores.length ? ': ' + errores.join(' | ') : ''}`)
+        check(errores.length === 0, `[${etiqueta}] Sin errores en consola${errores.length ? ': ' + errores.join(' | ') : ''}`)
+      } catch (e) {
+        check(false, `[${etiqueta}] excepcion: ${String(e.message).split('\n')[0]}`)
+        await diagnostico(page, errores)
+      }
+      if (fail > fallasAntes) await diagnostico(page, errores)
       await context.close()
+    }
+
+    // ---- Pagina cargada sin control del Service Worker (lo que pasa con una recarga forzada, Ctrl+Shift+R).
+    // Se simula haciendo que el navegador informe "sin controlador" en la primera carga o en todas.
+    for (const [modo, siempre] of [['primera-carga', false], ['todas-las-cargas', true]]) {
+      const etiquetaSW = `${nombreNav}/${objetivo.nombre}/sin-control-${modo}`
+      console.log(`\n=== ${etiquetaSW} ===`)
+      const ctxSW = await browser.newContext({ viewport: { width: 390, height: 844 } })
+      const pageSW = await ctxSW.newPage()
+      const fallasAntesSW = fail
+      const erroresSW = []
+      registrarErrores(pageSW, erroresSW, true)
+      let cargas = 0
+      pageSW.on('load', () => cargas++)
+      await pageSW.addInitScript((siempre) => {
+        const hacerlo = siempre || !sessionStorage.getItem('prueba-sin-control')
+        sessionStorage.setItem('prueba-sin-control', '1')
+        if (hacerlo && navigator.serviceWorker) Object.defineProperty(navigator.serviceWorker, 'controller', { get: () => null })
+      }, siempre)
+      try {
+        await pageSW.goto(objetivo.url + '#/destinos/madrid')
+        await pageSW.getByRole('heading', { name: /^Vuelos/ }).waitFor()
+        await pageSW.waitForTimeout(1500)
+        check(cargas === 2, `[${etiquetaSW}] Si la pagina queda sin control, se recarga una sola vez (${cargas} cargas)`)
+        check((await pageSW.locator('h1').innerText()) === 'Madrid', `[${etiquetaSW}] Despues de recargar, el destino se muestra bien`)
+      } catch (e) {
+        check(false, `[${etiquetaSW}] excepcion: ${String(e.message).split('\n')[0]}`)
+        await diagnostico(pageSW, erroresSW)
+      }
+      if (fail > fallasAntesSW) await diagnostico(pageSW, erroresSW)
+      await ctxSW.close()
+    }
+
+    // ---- La primera visita normal no se recarga sola
+    {
+      const etiquetaPV = `${nombreNav}/${objetivo.nombre}/primera-visita`
+      const ctxPV = await browser.newContext({ viewport: { width: 390, height: 844 } })
+      const pagePV = await ctxPV.newPage()
+      const fallasAntesPV = fail
+      const erroresPV = []
+      registrarErrores(pagePV, erroresPV, true)
+      let cargas = 0
+      pagePV.on('load', () => cargas++)
+      try {
+        await pagePV.goto(objetivo.url + '#/destinos')
+        await pagePV.locator(tarjetas).first().waitFor()
+        await pagePV.waitForTimeout(1500)
+        check(cargas === 1, `[${etiquetaPV}] La primera visita no se recarga sola (${cargas} carga)`)
+      } catch (e) {
+        check(false, `[${etiquetaPV}] excepcion: ${String(e.message).split('\n')[0]}`)
+        await diagnostico(pagePV, erroresPV)
+      }
+      if (fail > fallasAntesPV) await diagnostico(pagePV, erroresPV)
+      await ctxPV.close()
     }
 
     // ---- Fallas del backend (sin Service Worker, con respuestas controladas por la prueba)
@@ -183,45 +268,51 @@ for (const nombreNav of navegadores) {
     const destinosBuenos = JSON.stringify([{ id: 'prueba', nombre: 'Lugar de prueba', pais: 'Chile', descripcion: 'Descripcion', actividades: ['A', 'B', 'C'] }])
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' })
     const page = await ctx.newPage()
+    const fallasAntesF = fail
     const errores = []
-    page.on('pageerror', (e) => errores.push(e.message))
-    page.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && errores.push(m.text()))
+    registrarErrores(page, errores, true)
 
-    let respuestaRest = { status: 500, body: '{"message":"x"}' }
-    await page.route(apiDestinos, (ruta) => ruta.fulfill({ contentType: 'application/json', ...respuestaRest }))
-    await page.goto(base + '#/destinos')
-    await page.getByRole('alert').waitFor()
-    check(/No pudimos cargar los destinos/.test(await page.locator(alerta).innerText()) && /servidor tuvo un problema/.test(await page.locator(alerta).innerText()), `[${etiqueta}] REST 500: mensaje de error claro`)
-    respuestaRest = { status: 200, body: destinosBuenos }
-    await page.getByRole('button', { name: 'Reintentar' }).click()
-    await page.locator(tarjetas).first().waitFor()
-    check((await page.locator(tarjetas).count()) === 1 && (await page.locator(alerta).count()) === 0, `[${etiqueta}] REST: Reintentar recupera la lista`)
+    try {
+      let respuestaRest = { status: 500, body: '{"message":"x"}' }
+      await page.route(apiDestinos, (ruta) => ruta.fulfill({ contentType: 'application/json', ...respuestaRest }))
+      await page.goto(base + '#/destinos')
+      await page.getByRole('alert').waitFor()
+      check(/No pudimos cargar los destinos/.test(await page.locator(alerta).innerText()) && /servidor tuvo un problema/.test(await page.locator(alerta).innerText()), `[${etiqueta}] REST 500: mensaje de error claro`)
+      respuestaRest = { status: 200, body: destinosBuenos }
+      await page.getByRole('button', { name: 'Reintentar' }).click()
+      await page.locator(tarjetas).first().waitFor()
+      check((await page.locator(tarjetas).count()) === 1 && (await page.locator(alerta).count()) === 0, `[${etiqueta}] REST: Reintentar recupera la lista`)
 
-    let respuestaGql = { status: 200, body: JSON.stringify({ errors: [{ message: 'Servicio de vuelos no disponible.' }] }) }
-    await page.route(apiGraphql, (ruta) => ruta.fulfill({ contentType: 'application/json', ...respuestaGql }))
-    await page.getByRole('link', { name: 'Ver vuelos y hoteles de Lugar de prueba' }).click()
-    await page.getByRole('alert').waitFor()
-    check(/No pudimos cargar las opciones/.test(await page.locator(alerta).innerText()) && /Servicio de vuelos no disponible/.test(await page.locator(alerta).innerText()), `[${etiqueta}] GraphQL con errors: muestra el mensaje de la API`)
-    respuestaGql = { status: 200, body: JSON.stringify({ data: { vuelos: [], hoteles: [] } }) }
-    await page.getByRole('button', { name: 'Reintentar' }).click()
-    await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
-    check(/No hay vuelos/.test(await page.locator('#vuelos ~ .vacio').innerText()) && /No hay hoteles/.test(await page.locator('#hoteles ~ .vacio').innerText()), `[${etiqueta}] GraphQL: Reintentar funciona y una lista vacia muestra un mensaje`)
+      let respuestaGql = { status: 200, body: JSON.stringify({ errors: [{ message: 'Servicio de vuelos no disponible.' }] }) }
+      await page.route(apiGraphql, (ruta) => ruta.fulfill({ contentType: 'application/json', ...respuestaGql }))
+      await page.getByRole('link', { name: 'Ver vuelos y hoteles de Lugar de prueba' }).click()
+      await page.getByRole('alert').waitFor()
+      check(/No pudimos cargar las opciones/.test(await page.locator(alerta).innerText()) && /Servicio de vuelos no disponible/.test(await page.locator(alerta).innerText()), `[${etiqueta}] GraphQL con errors: muestra el mensaje de la API`)
+      respuestaGql = { status: 200, body: JSON.stringify({ data: { vuelos: [], hoteles: [] } }) }
+      await page.getByRole('button', { name: 'Reintentar' }).click()
+      await page.getByRole('heading', { name: /^Vuelos/ }).waitFor()
+      check(/No hay vuelos/.test(await page.locator('#vuelos ~ .vacio').innerText()) && /No hay hoteles/.test(await page.locator('#hoteles ~ .vacio').innerText()), `[${etiqueta}] GraphQL: Reintentar funciona y una lista vacia muestra un mensaje`)
 
-    await page.unroute(apiGraphql)
-    await page.route(apiGraphql, (ruta) => ruta.abort('failed'))
-    await page.goto(base + '#/destinos')
-    await page.reload() // recarga completa: se vacia la cache de Apollo
-    await page.getByRole('link', { name: 'Ver vuelos y hoteles de Lugar de prueba' }).click()
-    await page.getByRole('alert').waitFor()
-    check(/No se pudo conectar/.test(await page.locator(alerta).innerText()), `[${etiqueta}] GraphQL sin conexion: mensaje de falla de conexion`)
+      await page.unroute(apiGraphql)
+      await page.route(apiGraphql, (ruta) => ruta.abort('failed'))
+      await page.goto(base + '#/destinos')
+      await page.reload() // recarga completa: se vacia la cache de Apollo
+      await page.getByRole('link', { name: 'Ver vuelos y hoteles de Lugar de prueba' }).click()
+      await page.getByRole('alert').waitFor()
+      check(/No se pudo conectar/.test(await page.locator(alerta).innerText()), `[${etiqueta}] GraphQL sin conexion: mensaje de falla de conexion`)
 
-    await page.unroute(apiDestinos)
-    await page.route(apiDestinos, (ruta) => ruta.fulfill({ status: 200, contentType: 'text/html', body: '<html>no es json</html>' }))
-    await page.goto(base + '#/destinos')
-    await page.reload()
-    await page.getByRole('alert').waitFor()
-    check(/no se pudo leer/.test(await page.locator(alerta).innerText()), `[${etiqueta}] REST con respuesta que no es JSON: mensaje claro`)
-    check(errores.length === 0, `[${etiqueta}] La app no lanza errores no controlados${errores.length ? ': ' + errores.join(' | ') : ''}`)
+      await page.unroute(apiDestinos)
+      await page.route(apiDestinos, (ruta) => ruta.fulfill({ status: 200, contentType: 'text/html', body: '<html>no es json</html>' }))
+      await page.goto(base + '#/destinos')
+      await page.reload()
+      await page.getByRole('alert').waitFor()
+      check(/no se pudo leer/.test(await page.locator(alerta).innerText()), `[${etiqueta}] REST con respuesta que no es JSON: mensaje claro`)
+      check(errores.length === 0, `[${etiqueta}] La app no lanza errores no controlados${errores.length ? ': ' + errores.join(' | ') : ''}`)
+    } catch (e) {
+      check(false, `[${etiqueta}] excepcion: ${String(e.message).split('\n')[0]}`)
+      await diagnostico(page, errores)
+    }
+    if (fail > fallasAntesF) await diagnostico(page, errores)
     await ctx.close()
   }
   await browser.close()
