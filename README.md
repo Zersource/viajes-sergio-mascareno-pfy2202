@@ -134,3 +134,4 @@ npx playwright install chromium firefox webkit
 NAVEGADORES=chromium,firefox,webkit npm run test:e2e
 ```
 - **HTML**: el HTML renderizado de cada página de la versión compilada se validó con el validador W3C (`vnu.jar`) sin errores ni advertencias.
+- **Resultado en navegadores**: las pruebas de navegador se ejecutaron con Playwright 1.57.0 en macOS sobre Chromium 143 y WebKit 26.0: 576 verificaciones (288 por navegador), 0 fallas. Ademas se reviso a mano el sitio publicado en Chrome y en Brave: destinos, vuelos y hoteles de Cusco, filtro de disponibilidad, recarga en `#/destinos/madrid` y vista angosta, sin errores de la aplicacion en la consola.
